@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI PDF 뷰어</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap');
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --orange:#E8631A;--bg:#1a1a1a;--surface:#242424;--surface2:#2e2e2e;
+    --border:#3a3a3a;--text:#f0f0f0;--muted:#777;--blue:#3b82f6;
+    --green:#22c55e;--red:#ef4444;--ai:#10b981;--purple:#a855f7;
+  }
+  body{font-family:'Noto Sans KR',sans-serif;background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+  /* HEADER */
+  header{display:flex;align-items:center;justify-content:space-between;padding:0 16px;height:50px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;gap:10px}
+  .logo{font-weight:700;font-size:13px;color:var(--orange);white-space:nowrap}
+  .logo span{color:var(--muted);font-weight:400;margin-left:5px;font-size:11px}
+  .header-right{display:flex;align-items:center;gap:8px}
+  .layout-btns{display:flex;gap:3px}
+  .layout-btn{background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:5px;padding:4px 10px;font-size:11px;font-family:inherit;cursor:pointer;transition:all .12s}
+  .layout-btn.active{background:var(--orange);border-color:var(--orange);color:#fff}
+  .toggle-wrap{display:flex;align-items:center;gap:6px}
+  .toggle-label{font-size:11px;color:var(--muted);white-space:nowrap}
+  .toggle{position:relative;width:32px;height:18px;cursor:pointer;flex-shrink:0}
+  .toggle input{opacity:0;width:0;height:0}
+  .toggle-slider{position:absolute;inset:0;background:#444;border-radius:18px;transition:background .2s}
+  .toggle-slider::before{content:'';position:absolute;height:12px;width:12px;left:3px;top:3px;background:#fff;border-radius:50%;transition:transform .2s}
+  .toggle input:checked+.toggle-slider{background:var(--blue)}
+  .toggle input:checked+.toggle-slider::before{transform:translateX(14px)}
+
+  /* WORKSPACE */
+  .workspace{flex:1;display:flex;overflow:hidden}
+  .pane{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+  .pane+.pane{border-left:2px solid var(--border)}
+  .pane-header{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;gap:6px}
+  .pane-label{font-size:11px;font-weight:700;white-space:nowrap}
+  .pane-label.q{color:var(--orange)}
+  .pane-label.a{color:var(--blue)}
+  .pane-filename{font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px;flex:1}
+  .hbtn{background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:3px 8px;font-size:10px;font-family:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0;transition:all .12s}
+  .hbtn:hover{border-color:var(--orange);color:var(--orange)}
+  .hbtn.purple{border-color:var(--purple);color:#c084fc;background:rgba(168,85,247,.1)}
+  .hbtn.purple:hover{background:rgba(168,85,247,.25)}
+  .hbtn.purple.on{background:var(--purple);color:#fff;border-color:var(--purple)}
+
+  /* PANE SCROLL */
+  .pane-scroll{flex:1;overflow-y:auto;overflow-x:hidden;background:#111;display:flex;flex-direction:column;align-items:center;padding:12px;gap:8px;position:relative;}
+  .pane-scroll::-webkit-scrollbar{width:4px}
+  .pane-scroll::-webkit-scrollbar-thumb{background:#3a3a3a;border-radius:2px}
+  .pane-scroll.cap-mode{cursor:crosshair!important}
+  .pane-scroll.cap-mode canvas{pointer-events:none}
+
+  /* CAPTURE OVERLAY */
+  .cap-overlay{position:absolute;inset:0;z-index:40;cursor:crosshair;display:none}
+  .cap-overlay.on{display:block}
+  .cap-hint{position:sticky;top:8px;left:50%;transform:translateX(-50%);width:fit-content;margin:0 auto 8px;background:var(--purple);color:#fff;border-radius:20px;padding:5px 16px;font-size:12px;pointer-events:none;z-index:41;white-space:nowrap}
+  .cap-box{position:absolute;border:2px solid var(--purple);background:rgba(168,85,247,.12);pointer-events:none;display:none;z-index:42}
+  .cap-box::after{content:'드래그로 영역 선택';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:11px;color:var(--purple);white-space:nowrap;opacity:.7}
+
+  /* CAPTURE PREVIEW in chat */
+  .cap-preview-wrap{position:relative;display:inline-block;margin-bottom:4px}
+  .cap-preview-wrap img{max-width:220px;border-radius:6px;border:2px solid var(--purple);display:block}
+  .cap-preview-wrap .remove-cap{position:absolute;top:-6px;right:-6px;background:#ef4444;border:none;color:#fff;border-radius:50%;width:18px;height:18px;font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}
+
+  canvas.pdf-page{max-width:100%;height:auto!important;border-radius:3px;box-shadow:0 4px 16px rgba(0,0,0,.6);display:block}
+  .drop-zone{display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;min-height:260px;gap:10px;color:var(--muted);font-size:13px;text-align:center;border:2px dashed var(--border);border-radius:8px;transition:border-color .2s;cursor:pointer}
+  .drop-zone:hover,.drop-zone.drag-over{border-color:var(--orange);color:var(--orange)}
+  .drop-zone .icon{font-size:36px;opacity:.4}
+  .no-page{color:var(--muted);font-size:12px;margin-top:50px;text-align:center;line-height:2.2}
+
+  /* NAV */
+  .pane-nav{display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;background:var(--surface);border-top:1px solid var(--border);flex-shrink:0;flex-wrap:wrap}
+  .btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:4px 10px;font-size:13px;font-family:inherit;cursor:pointer;transition:background .1s;line-height:1;white-space:nowrap}
+  .btn:hover{background:#3a3a3a}
+  .btn:disabled{opacity:.25;cursor:default}
+  .btn.green{background:var(--green);border-color:var(--green);color:#fff}
+  .btn.green:hover{background:#16a34a}
+  .btn.red{background:var(--red);border-color:var(--red);color:#fff}
+  .btn.red:hover{background:#dc2626}
+  .btn.ai-btn{background:var(--ai);border-color:var(--ai);color:#fff;font-size:11px;padding:4px 10px}
+  .page-indicator{font-size:12px;color:var(--muted);min-width:70px;text-align:center}
+  .page-indicator strong{color:var(--text)}
+  .jump-wrap{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--muted)}
+  .jump-wrap input{width:42px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:3px 5px;font-size:11px;font-family:inherit;text-align:center;outline:none}
+  .jump-wrap input:focus{border-color:var(--orange)}
+  .score-wrap{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);border-left:1px solid var(--border);padding-left:8px}
+  .score-correct{color:var(--green);font-weight:700}
+  .score-wrong{color:var(--red);font-weight:700}
+
+  .pane.a-pane.hidden-answer .pane-scroll{filter:blur(14px);pointer-events:none}
+  body.single-q .pane.a-pane,body.single-q .ai-panel{display:none}
+  body.single-a .pane.q-pane,body.single-a .ai-panel{display:none}
+  body.split .ai-panel{display:none}
+  body.ai-mode .pane.a-pane{display:none}
+
+  /* AI PANEL */
+  .ai-panel{width:360px;min-width:300px;display:flex;flex-direction:column;border-left:2px solid var(--border);background:var(--surface);overflow:hidden;flex-shrink:0}
+  .ai-panel-header{padding:10px 14px 8px;border-bottom:1px solid var(--border);flex-shrink:0}
+  .ai-panel-header h3{font-size:13px;color:var(--ai);font-weight:700;margin-bottom:8px}
+  .provider-row{display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap}
+  .provider-btn{background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:14px;padding:3px 10px;font-size:11px;font-family:inherit;cursor:pointer;transition:all .12s}
+  .provider-btn.active{border-color:var(--ai);color:var(--ai);background:rgba(16,185,129,.1)}
+  .pkey-row{display:flex;gap:5px;align-items:center;margin-bottom:6px}
+  .pkey-row input{flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:4px 8px;font-size:11px;font-family:inherit;outline:none}
+  .pkey-row input:focus{border-color:var(--ai)}
+  .pkey-row .save-btn{background:var(--ai);border:none;color:#fff;border-radius:5px;padding:4px 10px;font-size:11px;font-family:inherit;cursor:pointer}
+  .pstatus{font-size:10px;color:var(--muted)}
+  .pstatus.ok{color:var(--green)}
+  .free-badge{color:var(--green);background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.3);border-radius:8px;padding:1px 7px;font-size:10px}
+  .quick-actions{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+  .quick-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:14px;padding:4px 10px;font-size:11px;font-family:inherit;cursor:pointer;transition:all .12s;white-space:nowrap}
+  .quick-btn:hover{border-color:var(--ai);color:var(--ai)}
+
+  /* CHAT */
+  .chat-messages{flex:1;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:10px}
+  .chat-messages::-webkit-scrollbar{width:4px}
+  .chat-messages::-webkit-scrollbar-thumb{background:#3a3a3a;border-radius:2px}
+  .msg{max-width:92%;display:flex;flex-direction:column;gap:3px}
+  .msg.user{align-self:flex-end}
+  .msg.ai{align-self:flex-start}
+  .msg-bubble{padding:8px 11px;border-radius:10px;font-size:12.5px;line-height:1.65;white-space:pre-wrap;word-break:break-word}
+  .msg.user .msg-bubble{background:var(--orange);color:#fff;border-bottom-right-radius:3px}
+  .msg.ai .msg-bubble{background:var(--surface2);color:var(--text);border-bottom-left-radius:3px;border:1px solid var(--border)}
+  .msg-meta{font-size:10px;color:var(--muted);padding:0 4px;display:flex;align-items:center;gap:5px}
+  .msg.user .msg-meta{justify-content:flex-end}
+  .provider-tag{font-size:9px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:1px 5px;color:var(--muted)}
+  .cap-thumb{max-width:180px;border-radius:5px;border:1px solid var(--purple);margin-bottom:4px;display:block}
+  .typing-indicator{display:flex;gap:4px;align-items:center;padding:6px 4px}
+  .typing-dot{width:6px;height:6px;background:var(--ai);border-radius:50%;animation:bounce 1.2s infinite}
+  .typing-dot:nth-child(2){animation-delay:.2s}
+  .typing-dot:nth-child(3){animation-delay:.4s}
+  @keyframes bounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-5px)}}
+
+  /* WRONG SECTION */
+  .wrong-section{padding:8px 12px;border-top:1px solid var(--border);flex-shrink:0}
+  .wrong-section h4{font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:500}
+  .wrong-tags{display:flex;flex-wrap:wrap;gap:4px;min-height:20px}
+  .wrong-tag{background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);color:#fca5a5;border-radius:10px;padding:2px 9px;font-size:10px;cursor:pointer}
+  .wrong-tag:hover{background:rgba(239,68,68,.3)}
+  .no-wrong{color:var(--muted);font-size:11px;font-style:italic}
+  .wrong-actions{display:flex;gap:5px;margin-top:6px}
+
+  /* CHAT INPUT */
+  .chat-input-area{padding:8px 10px;border-top:1px solid var(--border);flex-shrink:0;display:flex;flex-direction:column;gap:6px}
+  /* 캡처 미리보기 */
+  .pending-capture{display:none;align-items:center;gap:8px;background:rgba(168,85,247,.1);border:1px solid rgba(168,85,247,.3);border-radius:8px;padding:6px 10px}
+  .pending-capture.on{display:flex}
+  .pending-capture img{height:48px;border-radius:4px;border:1px solid var(--purple)}
+  .pending-capture span{font-size:11px;color:#c084fc;flex:1}
+  .pending-capture .rm{background:none;border:none;color:#ef4444;cursor:pointer;font-size:14px;padding:0 2px}
+  .chat-row{display:flex;gap:6px}
+  .chat-input{flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:7px 10px;font-size:12px;font-family:inherit;outline:none;resize:none;line-height:1.5;max-height:80px}
+  .chat-input:focus{border-color:var(--ai)}
+  .send-btn{background:var(--ai);border:none;color:#fff;border-radius:8px;padding:7px 13px;font-size:14px;cursor:pointer;flex-shrink:0}
+  .send-btn:hover{background:#059669}
+  .send-btn:disabled{background:#3a3a3a;cursor:default}
+
+  /* KBD BAR */
+  .kbd-bar{display:flex;align-items:center;justify-content:center;gap:0;padding:0;background:var(--surface);border-top:1px solid var(--border);flex-shrink:0;flex-wrap:wrap}
+  .kbd-section{display:flex;align-items:center;gap:6px;padding:5px 14px;border-right:1px solid var(--border)}
+  .kbd-section:last-child{border-right:none}
+  .kbd-title{font-size:10px;color:var(--muted);white-space:nowrap}
+  .kbd-group{display:flex;align-items:center;gap:3px}
+  kbd{font-size:10px;color:var(--text);background:var(--surface2);border:1px solid #555;border-bottom:2px solid #555;border-radius:4px;padding:2px 7px;font-family:inherit;min-width:20px;text-align:center}
+  .kbd-desc{font-size:10px;color:var(--muted)}
+
+  /* SHORTCUT MODAL */
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;z-index:200;display:none}
+  .modal-overlay.on{display:flex}
+  .shortcut-modal{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:480px;max-width:95vw;max-height:80vh;overflow-y:auto}
+  .shortcut-modal h2{font-size:15px;color:var(--text);margin-bottom:16px;display:flex;align-items:center;justify-content:space-between}
+  .shortcut-modal h2 button{background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer}
+  .shortcut-group{margin-bottom:16px}
+  .shortcut-group h3{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid var(--border)}
+  .shortcut-row{display:flex;align-items:center;justify-content:space-between;padding:5px 0;font-size:12px}
+  .shortcut-row .keys{display:flex;gap:4px}
+  .shortcut-row .desc{color:var(--muted)}
+</style>
+</head>
+<body class="split">
+
+<!-- 단축키 모달 -->
+<div class="modal-overlay" id="shortcutModal">
+  <div class="shortcut-modal">
+    <h2>⌨️ 단축키 목록 <button onclick="document.getElementById('shortcutModal').classList.remove('on')">✕</button></h2>
+    <div class="shortcut-group">
+      <h3>📘 문제지 이동</h3>
+      <div class="shortcut-row"><div class="keys"><kbd>←</kbd><kbd>→</kbd></div><span class="desc">이전 / 다음 페이지</span></div>
+      <div class="shortcut-row"><div class="keys"><kbd>Home</kbd></div><span class="desc">첫 페이지로</span></div>
+      <div class="shortcut-row"><div class="keys"><kbd>End</kbd></div><span class="desc">마지막 페이지로</span></div>
+    </div>
+    <div class="shortcut-group">
+      <h3>📗 해설지 이동</h3>
+      <div class="shortcut-row"><div class="keys"><kbd>A</kbd><kbd>D</kbd></div><span class="desc">이전 / 다음 페이지</span></div>
+    </div>
+    <div class="shortcut-group">
+      <h3>✅ 채점</h3>
+      <div class="shortcut-row"><div class="keys"><kbd>O</kbd></div><span class="desc">맞음 표시</span></div>
+      <div class="shortcut-row"><div class="keys"><kbd>X</kbd></div><span class="desc">틀림 표시 + AI 분석</span></div>
+    </div>
+    <div class="shortcut-group">
+      <h3>🟣 캡처</h3>
+      <div class="shortcut-row"><div class="keys"><kbd>C</kbd></div><span class="desc">캡처 모드 켜기/끄기</span></div>
+      <div class="shortcut-row"><div class="keys"><kbd>Esc</kbd></div><span class="desc">캡처 모드 취소</span></div>
+    </div>
+    <div class="shortcut-group">
+      <h3>기타</h3>
+      <div class="shortcut-row"><div class="keys"><kbd>H</kbd></div><span class="desc">해설 숨기기/보이기</span></div>
+      <div class="shortcut-row"><div class="keys"><kbd>?</kbd></div><span class="desc">단축키 목록 열기/닫기</span></div>
+    </div>
+  </div>
+</div>
+
+<header>
+  <div class="logo">📄 AI PDF 뷰어 <span>문제 · 해설 · AI 도우미</span></div>
+  <div class="header-right">
+    <div class="layout-btns">
+      <button class="layout-btn active" data-layout="split">📖 양쪽</button>
+      <button class="layout-btn" data-layout="ai-mode">🤖 AI모드</button>
+      <button class="layout-btn" data-layout="single-q">📘 문제</button>
+      <button class="layout-btn" data-layout="single-a">📗 해설</button>
+    </div>
+    <div class="toggle-wrap">
+      <span class="toggle-label">해설숨김</span>
+      <label class="toggle"><input type="checkbox" id="hideAnswer"><span class="toggle-slider"></span></label>
+    </div>
+    <button class="hbtn" onclick="document.getElementById('shortcutModal').classList.add('on')" title="단축키 목록 (?)">⌨️ 단축키</button>
+  </div>
+</header>
+
+<div class="workspace">
+  <!-- 문제지 -->
+  <div class="pane q-pane">
+    <div class="pane-header">
+      <span class="pane-label q">📘 문제지</span>
+      <span class="pane-filename" id="qFilename">파일 없음</span>
+      <input type="file" id="qFileInput" accept=".pdf" style="display:none">
+      <button class="hbtn purple on" id="qCapBtn" title="캡처 모드 (C)">✂️ 캡처</button>
+      <button class="hbtn" onclick="document.getElementById('qFileInput').click()">📂 PDF</button>
+    </div>
+    <div class="pane-scroll" id="qScroll">
+      <div class="cap-overlay" id="qCapOverlay">
+        <div class="cap-hint">드래그로 질문할 부분을 선택하세요  •  ESC 취소</div>
+        <div class="cap-box" id="qCapBox"></div>
+      </div>
+      <div class="drop-zone" id="qDrop">
+        <div class="icon">📂</div>
+        <p><b>PDF를 여기에 드래그</b>하거나<br>상단 📂 버튼으로 열기</p>
+        <small>회로이론_문제.pdf 등 어떤 PDF든 가능</small>
+      </div>
+    </div>
+    <div class="pane-nav">
+      <button class="btn" id="qPrev">◀</button>
+      <div class="page-indicator"><strong id="qNum">—</strong> / <span id="qTotalSpan">—</span></div>
+      <button class="btn" id="qNext">▶</button>
+      <div class="jump-wrap">
+        <input type="number" id="qJump" min="1" placeholder="p">
+        <button class="btn" id="qGo" style="font-size:11px;padding:3px 8px">GO</button>
+      </div>
+      <div class="score-wrap">
+        ✅<span class="score-correct" id="correctCount">0</span>
+        ❌<span class="score-wrong" id="wrongCount">0</span>
+      </div>
+      <button class="btn green" id="markCorrect" style="font-size:11px;padding:3px 9px">✔ 맞음</button>
+      <button class="btn red" id="markWrong" style="font-size:11px;padding:3px 9px">✘ 틀림</button>
+    </div>
+  </div>
+
+  <!-- 해설지 -->
+  <div class="pane a-pane" id="aPaneEl">
+    <div class="pane-header">
+      <span class="pane-label a">📗 해설지</span>
+      <span class="pane-filename" id="aFilename">파일 없음</span>
+      <input type="file" id="aFileInput" accept=".pdf" style="display:none">
+      <button class="hbtn" onclick="document.getElementById('aFileInput').click()">📂 PDF</button>
+    </div>
+    <div class="pane-scroll" id="aScroll">
+      <div class="drop-zone" id="aDrop">
+        <div class="icon">📂</div>
+        <p><b>PDF를 여기에 드래그</b>하거나<br>상단 📂 버튼으로 열기</p>
+        <small>회로이론_해설.pdf 등</small>
+      </div>
+    </div>
+    <div class="pane-nav">
+      <button class="btn" id="aPrev">◀</button>
+      <div class="page-indicator"><strong id="aNum">—</strong> / <span id="aTotalSpan">—</span></div>
+      <button class="btn" id="aNext">▶</button>
+      <div class="jump-wrap">
+        <input type="number" id="aJump" min="1" placeholder="p">
+        <button class="btn" id="aGo" style="font-size:11px;padding:3px 8px">GO</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI 패널 -->
+  <div class="ai-panel">
+    <div class="ai-panel-header">
+      <h3>🤖 AI 학습 도우미</h3>
+      <div class="provider-row">
+        <span style="font-size:11px;color:var(--muted)">AI:</span>
+        <button class="provider-btn active" data-provider="gemini">🟢 Gemini <span class="free-badge">무료</span></button>
+        <button class="provider-btn" data-provider="claude">🟠 Claude</button>
+        <button class="provider-btn" data-provider="openai">🔵 ChatGPT</button>
+      </div>
+      <div class="pkey-row">
+        <input type="password" id="keyInput" placeholder="API 키..." autocomplete="off">
+        <button class="save-btn" id="saveKey">저장</button>
+      </div>
+      <div id="keyStatus" class="pstatus"></div>
+      <div class="quick-actions">
+        <button class="quick-btn" data-prompt="이 문제의 핵심 개념을 쉽게 설명해줘.">💡 핵심 개념</button>
+        <button class="quick-btn" data-prompt="이 문제에서 자주 틀리는 이유를 알려줘.">❌ 왜 틀릴까</button>
+        <button class="quick-btn" data-prompt="관련 공식을 간단히 정리해줘.">📝 공식 정리</button>
+        <button class="quick-btn" data-prompt="ANALYZE_WEAK">📊 약점 분석</button>
+      </div>
+    </div>
+
+    <div class="chat-messages" id="chatMessages">
+      <div class="msg ai">
+        <div class="msg-bubble">안녕하세요! 회로이론 AI 튜터입니다 🎓
+
+<b>✂️ 캡처 기능</b>
+문제 위에서 <kbd style="background:#333;border:1px solid #555;border-radius:3px;padding:1px 5px;font-size:11px">C</kbd> 키 또는 캡처 버튼 → 드래그로 원하는 부분만 선택 → AI에게 바로 질문!
+
+<b>🟢 Gemini 무료 사용</b>
+👉 <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--ai)">aistudio.google.com/apikey</a> 에서 무료 키 발급</div>
+      </div>
+    </div>
+
+    <div class="wrong-section">
+      <h4>📌 틀린 문제 <span id="wrongTotal" style="color:var(--red)"></span></h4>
+      <div class="wrong-tags" id="wrongTags"><span class="no-wrong">아직 없음</span></div>
+      <div class="wrong-actions" id="wrongActions" style="display:none">
+        <button class="btn ai-btn" id="analyzeWrong">약점 분석</button>
+        <button class="btn" style="font-size:11px;padding:3px 8px;color:var(--red)" id="clearWrong">초기화</button>
+      </div>
+    </div>
+
+    <div class="chat-input-area">
+      <!-- 캡처 미리보기 -->
+      <div class="pending-capture" id="pendingCapture">
+        <img id="pendingCapImg" src="" alt="캡처">
+        <span>캡처 이미지 첨부됨</span>
+        <button class="rm" id="removeCap">✕</button>
+      </div>
+      <div class="chat-row">
+        <textarea class="chat-input" id="chatInput" placeholder="질문 입력... (Enter 전송, Shift+Enter 줄바꿈)" rows="2"></textarea>
+        <button class="send-btn" id="sendBtn">↑</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 단축키 바 -->
+<div class="kbd-bar">
+  <div class="kbd-section">
+    <span class="kbd-title">문제</span>
+    <div class="kbd-group"><kbd>←</kbd><kbd>→</kbd></div>
+  </div>
+  <div class="kbd-section">
+    <span class="kbd-title">해설</span>
+    <div class="kbd-group"><kbd>A</kbd><kbd>D</kbd></div>
+  </div>
+  <div class="kbd-section">
+    <span class="kbd-title">채점</span>
+    <div class="kbd-group"><kbd>O</kbd><span class="kbd-desc">맞음</span><kbd>X</kbd><span class="kbd-desc">틀림</span></div>
+  </div>
+  <div class="kbd-section">
+    <span class="kbd-title">캡처</span>
+    <div class="kbd-group"><kbd>C</kbd><span class="kbd-desc">캡처모드</span><kbd>Esc</kbd><span class="kbd-desc">취소</span></div>
+  </div>
+  <div class="kbd-section">
+    <span class="kbd-title">기타</span>
+    <div class="kbd-group"><kbd>H</kbd><span class="kbd-desc">해설숨김</span><kbd>?</kbd><span class="kbd-desc">단축키</span></div>
+  </div>
+</div>
+
+<script type="module">
+import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs';
+
+// ── STATE ──
+const P = {
+  q:{ doc:null,page:1,total:0,rendering:false,
+      scroll:document.getElementById('qScroll'), numEl:document.getElementById('qNum'),
+      totalEl:document.getElementById('qTotalSpan'), prev:document.getElementById('qPrev'),
+      next:document.getElementById('qNext'), jump:document.getElementById('qJump'),
+      fname:document.getElementById('qFilename') },
+  a:{ doc:null,page:1,total:0,rendering:false,
+      scroll:document.getElementById('aScroll'), numEl:document.getElementById('aNum'),
+      totalEl:document.getElementById('aTotalSpan'), prev:document.getElementById('aPrev'),
+      next:document.getElementById('aNext'), jump:document.getElementById('aJump'),
+      fname:document.getElementById('aFilename') }
+};
+
+let captureMode = false;
+let pendingCapB64 = null;
+let currentProvider = localStorage.getItem('ai_provider')||'gemini';
+const keys = { gemini:localStorage.getItem('key_gemini')||'', claude:localStorage.getItem('key_claude')||'', openai:localStorage.getItem('key_openai')||'' };
+let wrongPages = JSON.parse(localStorage.getItem('wrong_pages')||'[]');
+let correctPages = JSON.parse(localStorage.getItem('correct_pages')||'[]');
+let isAiLoading = false;
+
+// ── PDF RENDER ──
+async function renderPage(id) {
+  const p = P[id]; if (!p.doc||p.rendering) return;
+  p.rendering = true;
+  p.numEl.textContent = p.page;
+  p.prev.disabled = p.page<=1; p.next.disabled = p.page>=p.total;
+  p.jump.value = p.page;
+  try {
+    const pg = await p.doc.getPage(p.page);
+    const scale = Math.min((p.scroll.clientWidth-24)/pg.getViewport({scale:1}).width, 2.5);
+    const vp = pg.getViewport({scale});
+    const canvas = document.createElement('canvas');
+    canvas.className = 'pdf-page'; canvas.width = vp.width; canvas.height = vp.height;
+    await pg.render({canvasContext:canvas.getContext('2d'),viewport:vp}).promise;
+    // remove old canvas but keep overlay
+    const old = p.scroll.querySelector('canvas.pdf-page');
+    if (old) old.remove();
+    p.scroll.appendChild(canvas);
+    p.scroll.scrollTop = 0;
+  } catch(e) { console.error(e); }
+  p.rendering = false;
+}
+
+async function loadFile(id, file) {
+  const p = P[id];
+  p.fname.textContent = file.name;
+  // Remove drop zone
+  const dz = document.getElementById(id+'Drop'); if(dz) dz.remove();
+  const buf = await file.arrayBuffer();
+  p.doc = await pdfjsLib.getDocument(buf).promise;
+  p.total = p.doc.numPages; p.totalEl.textContent = p.total;
+  p.page = 1; await renderPage(id);
+}
+
+document.getElementById('qFileInput').onchange = e => { if(e.target.files[0]) loadFile('q',e.target.files[0]); };
+document.getElementById('aFileInput').onchange = e => { if(e.target.files[0]) loadFile('a',e.target.files[0]); };
+document.getElementById('qDrop').onclick = () => document.getElementById('qFileInput').click();
+document.getElementById('aDrop').onclick = () => document.getElementById('aFileInput').click();
+
+// drag & drop
+['q','a'].forEach(id => {
+  P[id].scroll.addEventListener('dragover', e=>{e.preventDefault();P[id].scroll.style.outline='2px dashed var(--orange)'});
+  P[id].scroll.addEventListener('dragleave', ()=>{P[id].scroll.style.outline=''});
+  P[id].scroll.addEventListener('drop', e=>{
+    e.preventDefault(); P[id].scroll.style.outline='';
+    const f=e.dataTransfer.files[0]; if(f&&f.type==='application/pdf') loadFile(id,f);
+  });
+});
+
+// ── NAV ──
+function nav(id,d){ const p=P[id]; if(!p.doc)return; p.page=Math.max(1,Math.min(p.total,p.page+d)); renderPage(id); }
+function goTo(id,v){ const p=P[id]; if(!p.doc)return; const n=parseInt(v); if(n>=1&&n<=p.total){p.page=n;renderPage(id);} }
+P.q.prev.onclick=()=>nav('q',-1); P.q.next.onclick=()=>nav('q',1);
+P.a.prev.onclick=()=>nav('a',-1); P.a.next.onclick=()=>nav('a',1);
+document.getElementById('qGo').onclick=()=>goTo('q',P.q.jump.value);
+document.getElementById('aGo').onclick=()=>goTo('a',P.a.jump.value);
+P.q.jump.onkeydown=e=>{if(e.key==='Enter')goTo('q',P.q.jump.value)};
+P.a.jump.onkeydown=e=>{if(e.key==='Enter')goTo('a',P.a.jump.value)};
+
+// ── LAYOUT ──
+document.querySelectorAll('.layout-btn').forEach(btn=>{
+  btn.onclick=()=>{ document.querySelectorAll('.layout-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); document.body.className=btn.dataset.layout; setTimeout(()=>{renderPage('q');renderPage('a');},50); };
+});
+document.getElementById('hideAnswer').onchange=e=>document.getElementById('aPaneEl').classList.toggle('hidden-answer',e.target.checked);
+
+// ── CAPTURE ──
+const qCapBtn   = document.getElementById('qCapBtn');
+const qCapOverlay = document.getElementById('qCapOverlay');
+const qCapBox   = document.getElementById('qCapBox');
+
+function setCaptureMode(on) {
+  captureMode = on;
+  qCapBtn.classList.toggle('on', on);
+  qCapOverlay.classList.toggle('on', on);
+  P.q.scroll.style.cursor = on ? 'crosshair' : '';
+}
+
+qCapBtn.onclick = () => setCaptureMode(!captureMode);
+
+// drag selection on overlay
+let capDrag = false, capStart = {x:0,y:0};
+
+qCapOverlay.addEventListener('mousedown', e => {
+  if(e.button!==0) return;
+  capDrag = true;
+  const r = qCapOverlay.getBoundingClientRect();
+  capStart = { x: e.clientX - r.left + qCapOverlay.scrollLeft,
+               y: e.clientY - r.top + qCapOverlay.scrollTop + P.q.scroll.scrollTop };
+  qCapBox.style.cssText = `display:block;left:${capStart.x}px;top:${capStart.y - P.q.scroll.scrollTop}px;width:0;height:0`;
+  e.preventDefault();
+});
+
+qCapOverlay.addEventListener('mousemove', e => {
+  if(!capDrag) return;
+  const r = qCapOverlay.getBoundingClientRect();
+  const cx = e.clientX - r.left;
+  const cy = e.clientY - r.top;
+  const sx = capStart.x, sy = capStart.y - P.q.scroll.scrollTop;
+  qCapBox.style.left   = Math.min(cx,sx)+'px';
+  qCapBox.style.top    = Math.min(cy,sy)+'px';
+  qCapBox.style.width  = Math.abs(cx-sx)+'px';
+  qCapBox.style.height = Math.abs(cy-sy)+'px';
+});
+
+qCapOverlay.addEventListener('mouseup', async e => {
+  if(!capDrag) return; capDrag = false;
+  qCapBox.style.display='none';
+
+  const canvas = P.q.scroll.querySelector('canvas.pdf-page');
+  if(!canvas) { setCaptureMode(false); return; }
+
+  const r = qCapOverlay.getBoundingClientRect();
+  const cr = canvas.getBoundingClientRect();
+  const scrollTop = P.q.scroll.scrollTop;
+
+  // selection rect in viewport coords
+  const cx = e.clientX - r.left;
+  const cy = e.clientY - r.top;
+  const sx = capStart.x, sy = capStart.y - P.q.scroll.scrollTop;
+  const selL = Math.min(cx,sx), selT = Math.min(cy,sy);
+  const selW = Math.abs(cx-sx), selH = Math.abs(cy-sy);
+
+  if(selW < 10 || selH < 10) { setCaptureMode(false); return; }
+
+  // map to canvas coordinates
+  const scaleX = canvas.width  / cr.width;
+  const scaleY = canvas.height / cr.height;
+  const offX = cr.left - r.left;
+  const offY = cr.top  - r.top + scrollTop;
+
+  const sx2 = (selL - offX + 0) * scaleX;
+  const sy2 = (selT + scrollTop - (cr.top - r.top + scrollTop)) * scaleY;
+
+  // clamp
+  const x = Math.max(0, sx2);
+  const y = Math.max(0, (selT - (cr.top - r.top)) * scaleY);
+  const w = Math.min(selW * scaleX, canvas.width  - x);
+  const h = Math.min(selH * scaleY, canvas.height - y);
+
+  const crop = document.createElement('canvas');
+  crop.width=w; crop.height=h;
+  crop.getContext('2d').drawImage(canvas, x,y,w,h, 0,0,w,h);
+  const dataUrl = crop.toDataURL('image/jpeg',0.92);
+  pendingCapB64 = dataUrl.split(',')[1];
+
+  // show preview
+  document.getElementById('pendingCapImg').src = dataUrl;
+  document.getElementById('pendingCapture').classList.add('on');
+
+  setCaptureMode(false);
+  // switch to AI mode if in split
+  if(document.body.className==='split'||document.body.className==='single-q') {
+    document.querySelectorAll('.layout-btn').forEach(b=>b.classList.remove('active'));
+    document.querySelector('[data-layout="ai-mode"]').classList.add('active');
+    document.body.className='ai-mode';
+  }
+  document.getElementById('chatInput').focus();
+});
+
+document.getElementById('removeCap').onclick = () => {
+  pendingCapB64=null;
+  document.getElementById('pendingCapture').classList.remove('on');
+};
+
+// ── SCORE ──
+function saveData(){ localStorage.setItem('wrong_pages',JSON.stringify(wrongPages)); localStorage.setItem('correct_pages',JSON.stringify(correctPages)); }
+function updateScoreUI(){
+  document.getElementById('correctCount').textContent=correctPages.length;
+  document.getElementById('wrongCount').textContent=wrongPages.length;
+  const has=wrongPages.length>0;
+  document.getElementById('wrongActions').style.display=has?'flex':'none';
+  document.getElementById('wrongTotal').textContent=has?`(${wrongPages.length}개)`:'';
+  document.getElementById('wrongTags').innerHTML=wrongPages.length===0
+    ?'<span class="no-wrong">아직 없음</span>'
+    :wrongPages.map(p=>`<span class="wrong-tag" onclick="window._jumpTo(${p})">문제 ${p}</span>`).join('');
+}
+window._jumpTo=p=>{P.q.page=p;renderPage('q')};
+
+document.getElementById('markCorrect').onclick=()=>{
+  const pg=P.q.page; wrongPages=wrongPages.filter(p=>p!==pg);
+  if(!correctPages.includes(pg)) correctPages.push(pg);
+  saveData(); updateScoreUI();
+  addMsg('user',`문제 ${pg}번 맞았어요 ✅`);
+  askAI(`문제 ${pg}페이지를 맞혔어요. 짧은 격려와 이 문제의 핵심 포인트 1가지만 알려줘.`, true, null);
+};
+document.getElementById('markWrong').onclick=()=>{
+  const pg=P.q.page; correctPages=correctPages.filter(p=>p!==pg);
+  if(!wrongPages.includes(pg)) wrongPages.push(pg);
+  saveData(); updateScoreUI();
+  addMsg('user',`문제 ${pg}번 틀렸어요 ❌`);
+  askAI(`문제 ${pg}페이지를 틀렸어요. 자주 틀리는 이유와 핵심 개념을 쉽게 설명해줘.`, true, null);
+};
+document.getElementById('clearWrong').onclick=()=>{ if(confirm('초기화할까요?')){wrongPages=[];correctPages=[];saveData();updateScoreUI();} };
+document.getElementById('analyzeWrong').onclick=()=>{
+  addMsg('user',`약점 분석 (틀린 페이지: ${wrongPages.join(', ')})`);
+  askAI(`틀린 문제 페이지: ${wrongPages.join(', ')}. 약점 분석 및 복습 순서 추천해줘.`, false, null);
+};
+
+// ── PROVIDER ──
+const pNames={gemini:'🟢 Gemini',claude:'🟠 Claude',openai:'🔵 ChatGPT'};
+const pHints={gemini:'AIza... (Google AI Studio — 무료)',claude:'sk-ant-... (Anthropic)',openai:'sk-... (OpenAI)'};
+function updateProviderUI(){
+  document.querySelectorAll('.provider-btn').forEach(b=>b.classList.toggle('active',b.dataset.provider===currentProvider));
+  document.getElementById('keyInput').placeholder=pHints[currentProvider];
+  document.getElementById('keyInput').value=keys[currentProvider];
+  const has=!!keys[currentProvider];
+  const st=document.getElementById('keyStatus');
+  if(currentProvider==='gemini'){
+    st.innerHTML=has?'<span class="free-badge" style="color:var(--green)">✅ 저장됨 — 무료 사용 중</span>'
+      :'👆 <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--ai)">무료 키 발급하기</a>';
+  } else {
+    st.textContent=has?'✅ API 키 저장됨':'⚠️ API 키를 입력해 주세요';
+    st.className=has?'pstatus ok':'pstatus';
+  }
+}
+document.querySelectorAll('.provider-btn').forEach(btn=>{
+  btn.onclick=()=>{currentProvider=btn.dataset.provider;localStorage.setItem('ai_provider',currentProvider);updateProviderUI();};
+});
+document.getElementById('saveKey').onclick=()=>{
+  const k=document.getElementById('keyInput').value.trim();
+  keys[currentProvider]=k; localStorage.setItem('key_'+currentProvider,k); updateProviderUI();
+};
+
+// ── QUICK BUTTONS ──
+document.querySelectorAll('.quick-btn').forEach(btn=>{
+  btn.onclick=()=>{
+    const p=btn.dataset.prompt;
+    if(p==='ANALYZE_WEAK'){
+      if(!wrongPages.length){addMsg('ai','아직 틀린 문제가 없어요!');return;}
+      addMsg('user','📊 약점 분석');
+      askAI(`틀린 페이지: ${wrongPages.join(', ')}. 약점 분석 및 복습 순서 추천해줘.`,false,null);
+    } else {
+      addMsg('user',btn.textContent.trim());
+      askAI(`현재 문제 ${P.q.page}페이지를 보고 있어. ${p}`,true,null);
+    }
+  };
+});
+
+// ── CHAT ──
+function addMsg(role, html, capB64=null) {
+  const div=document.createElement('div'); div.className=`msg ${role}`;
+  const t=new Date(); const time=`${t.getHours().toString().padStart(2,'0')}:${t.getMinutes().toString().padStart(2,'0')}`;
+  const tag=role==='ai'?`<span class="provider-tag">${pNames[currentProvider]}</span>`:'';
+  let extra='';
+  if(capB64) extra=`<img class="cap-thumb" src="data:image/jpeg;base64,${capB64}">`;
+  div.innerHTML=`${extra}<div class="msg-bubble">${html}</div><div class="msg-meta">${tag}${time}</div>`;
+  const cm=document.getElementById('chatMessages'); cm.appendChild(div); cm.scrollTop=cm.scrollHeight;
+}
+function addTyping(){ const div=document.createElement('div');div.className='msg ai';div.id='typing';div.innerHTML='<div class="msg-bubble"><div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div></div>';const cm=document.getElementById('chatMessages');cm.appendChild(div);cm.scrollTop=cm.scrollHeight; }
+function removeTyping(){ const t=document.getElementById('typing');if(t)t.remove(); }
+
+function getPageB64(id){
+  const canvas=P[id].scroll.querySelector('canvas.pdf-page');
+  if(!canvas) return null;
+  return canvas.toDataURL('image/jpeg',0.85).split(',')[1];
+}
+
+const SYSTEM=`당신은 전기기사 필기시험 회로이론 및 제어공학 전문 튜터입니다. 학생의 문제 이미지를 보고 한국어로 친근하고 명확하게 답변하세요. 핵심을 짧고 명확하게 전달하세요.`;
+
+async function askAI(prompt, includeFullPage=true, captureB64=null) {
+  const key=keys[currentProvider];
+  if(!key){ addMsg('ai',`⚠️ ${pNames[currentProvider]} API 키가 없어요!\n위 입력창에 키를 입력해 주세요.${currentProvider==='gemini'?'\n\n👉 <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--ai)">무료 발급</a>':''}`); return; }
+  if(isAiLoading) return;
+  isAiLoading=true; document.getElementById('sendBtn').disabled=true; addTyping();
+
+  // image: capture 우선, 없으면 전체 페이지
+  const imgB64 = captureB64 || (includeFullPage ? getPageB64('q') : null);
+
+  try {
+    let text='';
+    if(currentProvider==='gemini'){
+      const parts=[];
+      if(imgB64) parts.push({inline_data:{mime_type:'image/jpeg',data:imgB64}});
+      parts.push({text:SYSTEM+'\n\n'+prompt});
+      const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,{method:'POST',mode:'cors',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts}]})});
+      const d=await r.json(); if(d.error) throw new Error(d.error.message);
+      text=d.candidates?.[0]?.content?.parts?.[0]?.text||'응답 없음';
+    } else if(currentProvider==='claude'){
+      const content=[];
+      if(imgB64) content.push({type:'image',source:{type:'base64',media_type:'image/jpeg',data:imgB64}});
+      content.push({type:'text',text:prompt});
+      const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,system:SYSTEM,messages:[{role:'user',content}]})});
+      const d=await r.json(); if(d.error) throw new Error(d.error.message);
+      text=d.content?.map(c=>c.text||'').join('')||'응답 없음';
+    } else {
+      const content=[];
+      if(imgB64) content.push({type:'image_url',image_url:{url:`data:image/jpeg;base64,${imgB64}`}});
+      content.push({type:'text',text:prompt});
+      const r=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${key}`},body:JSON.stringify({model:'gpt-4o-mini',max_tokens:1000,messages:[{role:'system',content:SYSTEM},{role:'user',content}]})});
+      const d=await r.json(); if(d.error) throw new Error(d.error.message);
+      text=d.choices?.[0]?.message?.content||'응답 없음';
+    }
+    removeTyping();
+    addMsg('ai', text.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br>'));
+  } catch(e){ removeTyping(); addMsg('ai',`❌ 오류: ${e.message}`); }
+  isAiLoading=false; document.getElementById('sendBtn').disabled=false;
+}
+
+document.getElementById('sendBtn').onclick=()=>{
+  const text=document.getElementById('chatInput').value.trim();
+  if(!text&&!pendingCapB64) return;
+  const cap=pendingCapB64;
+  addMsg('user', (text||'(캡처 이미지 질문)').replace(/</g,'&lt;'), cap);
+  document.getElementById('chatInput').value='';
+  pendingCapB64=null;
+  document.getElementById('pendingCapture').classList.remove('on');
+  const prompt = text ? `현재 문제 ${P.q.page}페이지를 보고 있어. ${text}` : `이 캡처 이미지에 있는 문제나 개념을 설명해줘.`;
+  askAI(prompt, !cap, cap);
+};
+document.getElementById('chatInput').onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();document.getElementById('sendBtn').click();} };
+
+// ── KEYBOARD ──
+document.addEventListener('keydown', e=>{
+  const tag=e.target.tagName;
+  if(tag==='INPUT'||tag==='TEXTAREA') return;
+  switch(e.key){
+    case 'ArrowLeft':  nav('q',-1); break;
+    case 'ArrowRight': nav('q', 1); break;
+    case 'Home': if(P.q.doc){P.q.page=1;renderPage('q');} break;
+    case 'End':  if(P.q.doc){P.q.page=P.q.total;renderPage('q');} break;
+    case 'a': case 'A': nav('a',-1); break;
+    case 'd': case 'D': nav('a', 1); break;
+    case 'o': case 'O': document.getElementById('markCorrect').click(); break;
+    case 'x': case 'X': document.getElementById('markWrong').click(); break;
+    case 'c': case 'C': setCaptureMode(!captureMode); break;
+    case 'Escape': if(captureMode){setCaptureMode(false);capDrag=false;qCapBox.style.display='none';} break;
+    case 'h': case 'H': { const cb=document.getElementById('hideAnswer');cb.checked=!cb.checked;cb.dispatchEvent(new Event('change')); break; }
+    case '?': document.getElementById('shortcutModal').classList.toggle('on'); break;
+  }
+});
+
+// close modal on overlay click
+document.getElementById('shortcutModal').addEventListener('click', e=>{ if(e.target===document.getElementById('shortcutModal')) e.target.classList.remove('on'); });
+
+// ── INIT ──
+updateProviderUI();
+updateScoreUI();
+</script>
+</body>
+</html>
